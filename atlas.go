@@ -7,6 +7,7 @@ import (
 	"io/ioutil"
 	"os"
 	"os/exec"
+	"strings"
 
 	"github.com/samuelngs/atlas/etcd"
 	"github.com/samuelngs/atlas/parser"
@@ -21,8 +22,11 @@ func main() {
 	// count args
 	if l := len(args); l == 0 {
 		filename = "atlas.yaml"
-	} else if l > 1 {
+	} else if l == 1 {
 		filename = args[0]
+	} else {
+		fmt.Println("only allow a single configuration file")
+		return
 	}
 
 	data, ioErr := ioutil.ReadFile(filename)
@@ -54,6 +58,11 @@ func main() {
 		return
 	}
 
+	if ipv4 := os.Getenv("COREOS_PRIVATE_IPV4"); ipv4 != "" {
+		endpoint := fmt.Sprintf("http://%v:4001", ipv4)
+		opts.Etcd.Endpoints = []string{endpoint}
+	}
+
 	client := &etcd.Client{
 		Endpoints: opts.Etcd.Endpoints,
 	}
@@ -67,7 +76,7 @@ func main() {
 	nodes, err := client.GetNodes(opts.Daemon.Discovery)
 
 	if err != nil {
-		fmt.Println("unable fetch existed service nodes")
+		fmt.Println("unable fetch existed service nodes:", err)
 		return
 	}
 
@@ -85,7 +94,9 @@ func main() {
 
 	for _, c := range execute {
 		var str string
-		if count > 0 {
+		if len(c) > 0 && string(c[0]) == "$" {
+			str = os.Getenv(c[1:len(c)])
+		} else if count > 0 {
 			var doc bytes.Buffer
 			tmpl, err := template.New("node").Parse(c)
 			if err != nil {
@@ -104,8 +115,14 @@ func main() {
 		}
 	}
 
-	if err := exec.Command(opts.Daemon.EntryPoint, commands...).Run(); err != nil {
+	fmt.Printf("args: %v\n", strings.Join(commands, " "))
+
+	cmd := exec.Command(opts.Daemon.EntryPoint, commands...)
+
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	if err := cmd.Run(); err != nil {
 		fmt.Println(err)
-		return
 	}
 }

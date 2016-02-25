@@ -1,0 +1,23 @@
+
+etcd:
+  endpoints:
+    - http://127.0.0.1:2379
+daemon:
+  discovery: /announce/service/rethinkdb-haproxy
+  entrypoint: rethinkdb
+  master:
+    - "--canonical-address"
+    - "$COREOS_PRIVATE_IPV4"
+    - "--directory"
+    - "/rethinkdb/data"
+    - "--bind"
+    - "all"
+  slave:
+    - "--canonical-address"
+    - "$COREOS_PRIVATE_IPV4"
+    - "--directory"
+    - "/rethinkdb/data"
+    - "--join"
+    - "{{with index . 0}}{{.IP}}:29015{{end}}"
+    - "--bind"
+    - "all"
