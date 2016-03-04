@@ -7,7 +7,6 @@ import (
 	"io/ioutil"
 	"os"
 	"os/exec"
-	"strings"
 
 	"github.com/samuelngs/atlas/etcd"
 	"github.com/samuelngs/atlas/parser"
@@ -115,14 +114,22 @@ func main() {
 		}
 	}
 
-	fmt.Printf("args: %v\n", strings.Join(commands, " "))
+	c := make(chan error)
 
-	cmd := exec.Command(opts.Daemon.EntryPoint, commands...)
+	go func() {
+		cmd := exec.Command(opts.Daemon.EntryPoint, commands...)
+		defer func() {
+			cmd.Process.Kill()
+		}()
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		if err := cmd.Start(); err != nil {
+			panic(err)
+		}
+		c <- cmd.Wait()
+	}()
 
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-
-	if err := cmd.Run(); err != nil {
+	if err := <-c; err != nil {
 		fmt.Println(err)
 	}
 }
