@@ -8,8 +8,8 @@ import (
 	"os"
 	"os/exec"
 
-	"github.com/samuelngs/atlas/etcd"
-	"github.com/samuelngs/atlas/parser"
+	"github.com/samuelngs/axis/etcd"
+	"github.com/samuelngs/axis/parser"
 )
 
 func main() {
@@ -20,7 +20,7 @@ func main() {
 	var filename string
 	// count args
 	if l := len(args); l == 0 {
-		filename = "atlas.yaml"
+		filename = "axis.yaml"
 	} else if l == 1 {
 		filename = args[0]
 	} else {
