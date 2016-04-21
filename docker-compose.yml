@@ -1,0 +1,16 @@
+etcd_data:
+  image: busybox
+
+etcd:
+  image: microbox/etcd:2.1.1
+  volumes_from:
+    - etcd_data
+  ports:
+    - "2379:2379"
+    - "2380:2380"
+    - "4001:4001"
+    - "7001:7001"
+  command: -data-dir=/data -advertise-client-urls=http://127.0.0.1:2379 -listen-client-urls=http://0.0.0.0:2379,http://0.0.0.0:4001 -listen-peer-urls=http://127.0.0.1:2380,http://127.0.0.1:7001
+  restart: always
+  mem_limit: 52428800
+
