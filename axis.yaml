@@ -2,22 +2,32 @@
 etcd:
   endpoints:
     - http://127.0.0.1:2379
+    - http://127.0.0.1:4001
+
 daemon:
-  discovery: /announce/service/rethinkdb-haproxy
-  entrypoint: rethinkdb
-  master:
-    - "--canonical-address"
-    - "$COREOS_PRIVATE_IPV4"
-    - "--directory"
-    - "/rethinkdb/data"
-    - "--bind"
-    - "all"
-  slave:
-    - "--canonical-address"
-    - "$COREOS_PRIVATE_IPV4"
-    - "--directory"
-    - "/rethinkdb/data"
-    - "--join"
-    - "{{with index . 0}}{{.IP}}:29015{{end}}"
-    - "--bind"
-    - "all"
+  prefix: /develope.network/services
+  name: rethinkdb
+  leader:
+    entrypoint: rethinkdb
+    command:
+      - "--canonical-address"
+      - "{{AXIS_IP}}"
+      - "--directory"
+      - "/data"
+      - "--bind"
+      - "all"
+    health:
+      port:
+        - 28015
+  worker:
+    entrypoint: rethinkdb
+    command:
+      - "--canonical-address"
+      - "{{AXIS_IP}}"
+      - "--directory"
+      - "/data"
+      - "--join"
+      - "{{AXIS_NODES}}"
+      - "{{with index . 0}}{{.IP}}:29015{{end}}"
+      - "--bind"
+      - "all"
