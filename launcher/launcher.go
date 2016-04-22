@@ -11,7 +11,10 @@ import (
 )
 
 // Start - start program with given scope and entrypoint option
-func Start(scope *models.Scope, opts *models.ApplicationEntryPoint) {
+func Start(close chan struct{}, scope *models.Scope, opts *models.ApplicationEntryPoint) {
+	defer func() {
+		close <- struct{}{}
+	}()
 
 	// init commands array
 	commands := []string{}

@@ -22,7 +22,7 @@ type (
 	}
 	// ApplicationHealth is the `health checks` section for the `daemon`
 	ApplicationHealth struct {
-		Port []uint `yaml:"port"`
+		Ports []string `yaml:"ports"`
 	}
 	// YamlOptions is the content of yaml configuration file
 	YamlOptions struct {

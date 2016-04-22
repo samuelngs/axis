@@ -39,6 +39,9 @@ var (
 	// ElectionTTL - a period of time after-which the defined election node
 	// will be expired and removed from the etcd cluster
 	ElectionTTL = time.Second * 10
+	// ServiceTTL - a period of time after-which the defined service node
+	// will be expired and removed from the etcd cluster
+	ServiceTTL = time.Second * 10
 )
 
 const (
@@ -144,7 +147,7 @@ func (c *Client) Election() {
 	for {
 		select {
 		case <-refresh.C:
-			c.ExtendTTL(ctx)
+			c.ExtendElectionTTL(ctx)
 			c.LookupLeader(ctx)
 		case <-c.cancel:
 			if !isCancelled {
@@ -156,8 +159,8 @@ func (c *Client) Election() {
 	}
 }
 
-// ExtendTTL - to node extend ttl
-func (c *Client) ExtendTTL(ctx context.Context) {
+// ExtendElectionTTL - to node extend ttl
+func (c *Client) ExtendElectionTTL(ctx context.Context) {
 	// generate election key
 	key := c.dir.ElectionNode(c.address)
 	// extend ttl
@@ -246,6 +249,36 @@ func (c *Client) LookupLeader(ctx context.Context) {
 		c.leader = leader
 		c.Unlock()
 	}
+}
+
+// SetServiceRunning - change service status as running
+func (c *Client) SetServiceRunning() {
+	// generate election key
+	key := c.dir.RunningNode(c.address)
+	// register service
+	c.client.Set(context.Background(), key, c.address, &client.SetOptions{
+		Dir: false,
+		TTL: ServiceTTL,
+	})
+}
+
+// RenewService - renew service status as running (ttl)
+func (c *Client) RenewService() {
+	// generate election key
+	key := c.dir.RunningNode(c.address)
+	// register service
+	c.client.Set(context.Background(), key, c.address, &client.SetOptions{
+		PrevExist: client.PrevExist,
+		TTL:       ServiceTTL,
+	})
+}
+
+// UnsetServiceRunning - change service status as stopped
+func (c *Client) UnsetServiceRunning() {
+	// generate election key
+	key := c.dir.RunningNode(c.address)
+	// unregister service
+	c.client.Delete(context.Background(), key, nil)
 }
 
 // GenerateScope - generate scope base
