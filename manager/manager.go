@@ -1,10 +1,11 @@
-package etcd
+package manager
 
 import (
 	"fmt"
 	"log"
 	"net"
 	"os"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -19,6 +20,9 @@ type (
 	// Client - the etcd client
 	Client struct {
 
+		// lock
+		sync.RWMutex
+
 		// client props
 		endpoints []string
 		events    chan *models.Event
@@ -29,26 +33,23 @@ type (
 		address string
 		dir     *models.Directory
 
+		// service state
+		running bool
+
 		// election state
-		sync.RWMutex
 		leader *models.Leader
 	}
 )
 
 var (
-	// ElectionTTL - a period of time after-which the defined election node
-	// will be expired and removed from the etcd cluster
-	ElectionTTL = time.Second * 10
 	// ServiceTTL - a period of time after-which the defined service node
 	// will be expired and removed from the etcd cluster
 	ServiceTTL = time.Second * 10
 )
 
 const (
-	// DirectoryLock - the path of the lock
-	DirectoryLock string = "lock"
 	// DirectoryElection - the path of the election
-	DirectoryElection = "election"
+	DirectoryElection string = "election"
 	// DirectoryMasters - the path of the masters
 	DirectoryMasters = "masters"
 	// DirectoryNodes - the path of the nodes
@@ -60,12 +61,10 @@ const (
 
 	// EventElected - the leader election is completed
 	EventElected string = "elected"
-	// EventElecting - the leader election is currently processing
-	EventElecting = "electing"
-	// EventDead - the leader is dead
-	EventDead = "dead"
-	// EventLock - the election lock is ready
-	EventLock = "lock"
+	// EventElection - the leader election is started
+	EventElection = "election"
+	// EventReady - the service is ready to run
+	EventReady = "ready"
 	// EventWait - the election wait lock
 	EventWait = "wait"
 
@@ -75,7 +74,7 @@ const (
 	GroupWorker = "worker"
 )
 
-// NewClient - create a etcd clien instance
+// NewClient - create a etcd client instance
 func NewClient(endpoints ...[]string) *Client {
 	client := &Client{
 		events: make(chan *models.Event),
@@ -102,8 +101,26 @@ func (c *Client) Leader() *models.Leader {
 	return leader
 }
 
-// SetDirectory - set directory for the etcd watcher
-func (c *Client) SetDirectory(prefix, name string) {
+// SetupDirectory - setup directory for service
+func (c *Client) SetupDirectory() {
+	v := reflect.ValueOf(c.dir)
+	if v.Kind() == reflect.Ptr {
+		v = v.Elem()
+	}
+	if v.Kind() != reflect.Struct {
+		log.Fatal("only accepts structs")
+	}
+	for i := 0; i < v.NumField(); i++ {
+		key := v.Field(i).String()
+		c.client.Set(context.Background(), key, "", &client.SetOptions{
+			Dir:       true,
+			PrevExist: client.PrevNoExist,
+		})
+	}
+}
+
+// Observe - observe directory
+func (c *Client) Observe(prefix, name string) {
 	c.dir = &models.Directory{
 		Base:     fmt.Sprintf("%v/%v", prefix, name),
 		Election: fmt.Sprintf("%v/%v/%v", prefix, name, DirectoryElection),
@@ -111,6 +128,33 @@ func (c *Client) SetDirectory(prefix, name string) {
 		Queue:    fmt.Sprintf("%v/%v/%v", prefix, name, DirectoryQueue),
 		Nodes:    fmt.Sprintf("%v/%v/%v", prefix, name, DirectoryNodes),
 		Masters:  fmt.Sprintf("%v/%v/%v", prefix, name, DirectoryMasters),
+	}
+	// register service
+	c.SetupDirectory()
+	c.RegisterNode(c.dir.Node(c.address))
+	c.RegisterNode(c.dir.QueueNode(c.address))
+	c.RegisterNode(c.dir.ElectionNode(c.address))
+	// create a interval timer to monitor service nodes
+	interval := time.NewTicker(ServiceTTL / 2)
+	defer interval.Stop()
+	for {
+		select {
+		case <-interval.C:
+			go func() {
+				// read running state
+				c.RLock()
+				var running = c.running
+				c.RUnlock()
+				// renew nodes
+				c.RenewNode(c.dir.Node(c.address))
+				c.RenewNode(c.dir.ElectionNode(c.address))
+				if running {
+					c.RenewNode(c.dir.RunningNode(c.address))
+				} else {
+					c.RenewNode(c.dir.QueueNode(c.address))
+				}
+			}()
+		}
 	}
 }
 
@@ -143,11 +187,11 @@ func (c *Client) Election() {
 	refresh := time.NewTicker(ElectionTTL / 2)
 	defer refresh.Stop()
 	// observe election changes
-	go c.Observe(ctx)
+	go c.Stop(ctx)
 	for {
 		select {
 		case <-refresh.C:
-			c.ExtendElectionTTL(ctx)
+			c.RenewNode(key)
 			c.LookupLeader(ctx)
 		case <-c.cancel:
 			if !isCancelled {
@@ -159,19 +203,29 @@ func (c *Client) Election() {
 	}
 }
 
-// ExtendElectionTTL - to node extend ttl
-func (c *Client) ExtendElectionTTL(ctx context.Context) {
-	// generate election key
-	key := c.dir.ElectionNode(c.address)
-	// extend ttl
-	c.client.Set(ctx, key, c.address, &client.SetOptions{
-		PrevExist: client.PrevExist,
-		TTL:       ElectionTTL,
+// RegisterNode - register node to etcd
+func (c *Client) RegisterNode(dir string) {
+	c.client.Set(context.Background(), dir, c.address, &client.SetOptions{
+		Dir: false,
+		TTL: ServiceTTL,
 	})
 }
 
-// Observe - to observe the etcd nodes changes
-func (c *Client) Observe(ctx context.Context) {
+// UnsetNode - unregister node and extend ttl
+func (c *Client) UnsetNode(dir string) {
+	c.client.Delete(context.Background(), dir, nil)
+}
+
+// RenewNode - renew node and extend ttl
+func (c *Client) RenewNode(dir string) {
+	c.client.Set(context.Background(), dir, c.address, &client.SetOptions{
+		PrevExist: client.PrevExist,
+		TTL:       ServiceTTL,
+	})
+}
+
+// Stop - to observe the etcd nodes changes
+func (c *Client) Stop(ctx context.Context) {
 	// create watcher
 	watcher := c.client.Watcher(c.dir.Election, &client.WatcherOptions{
 		AfterIndex: 0,
