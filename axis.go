@@ -1,15 +1,17 @@
 package main
 
 import (
-	"bytes"
-	"fmt"
-	"html/template"
-	"io/ioutil"
+	"log"
 	"os"
-	"os/exec"
 
 	"github.com/samuelngs/axis/etcd"
+	"github.com/samuelngs/axis/launcher"
+	"github.com/samuelngs/axis/models"
 	"github.com/samuelngs/axis/parser"
+)
+
+var (
+	daemonStarted = false
 )
 
 func main() {
@@ -17,119 +19,71 @@ func main() {
 	// get program arguments
 	args := os.Args[1:]
 
+	// extract filename from arguments
 	var filename string
-	// count args
-	if l := len(args); l == 0 {
+	switch {
+	case len(args) == 0:
 		filename = "axis.yaml"
-	} else if l == 1 {
+	case len(args) == 1:
 		filename = args[0]
-	} else {
-		fmt.Println("only allow a single configuration file")
+	default:
+		log.Fatal("only allow a single configuration file")
 		return
 	}
 
-	data, ioErr := ioutil.ReadFile(filename)
-
-	if ioErr != nil {
-		fmt.Println("unable read configuration file")
-		return
-	}
-
-	opts, parseErr := parser.ParseYaml(data)
-
-	if parseErr != nil {
-		fmt.Println("unable parse configuration file")
-		return
-	}
-
-	if opts.Daemon.EntryPoint == "" {
-		fmt.Println("require entrypoint")
-		return
-	}
-
-	if opts.Daemon.Master == nil {
-		fmt.Println("require master command")
-		return
-	}
-
-	if opts.Daemon.Slave == nil {
-		fmt.Println("require slave command")
-		return
-	}
-
-	if ipv4 := os.Getenv("COREOS_PRIVATE_IPV4"); ipv4 != "" {
-		endpoint := fmt.Sprintf("http://%v:4001", ipv4)
-		opts.Etcd.Endpoints = []string{endpoint}
-	}
-
-	client := &etcd.Client{
-		Endpoints: opts.Etcd.Endpoints,
-	}
-
-	if err := client.Connect(); err != nil {
-		fmt.Println("unable connect etcd client")
-		return
-	}
-
-	// Get all exists nodes
-	nodes, err := client.GetNodes(opts.Daemon.Discovery)
-
+	// open yaml file and parse the configurations
+	conf, err := parser.OpenYaml(filename)
 	if err != nil {
-		fmt.Println("unable fetch existed service nodes:", err)
+		log.Fatal(err)
+	}
+
+	// create etcd client
+	client := etcd.NewClient(conf.Etcd.Endpoints)
+
+	// connect etcd server
+	if err := client.Connect(); err != nil {
+		log.Fatal("unable connect etcd client")
+	}
+
+	// process election events
+	go process(client.Events(), conf.Daemon)
+
+	// set etcd service directory
+	client.SetDirectory(
+		conf.Daemon.Prefix, // <= prefix name
+		conf.Daemon.Name,   // <= service name
+	)
+
+	// execute etcd `leader` election
+	client.Election()
+}
+
+func process(receive chan *models.Event, opts *models.ApplicationOptions) {
+	for {
+		select {
+		case event := <-receive:
+			switch event.Type {
+			case etcd.EventElected:
+				go launchApplication(event.Scope, opts)
+			case etcd.EventElecting:
+			case etcd.EventDead:
+			}
+		}
+	}
+}
+
+func launchApplication(scope *models.Scope, opts *models.ApplicationOptions) {
+	if daemonStarted {
 		return
 	}
-
-	// build commands
-	var execute []string
-	commands := []string{}
-
-	count := len(nodes)
-
-	if count > 0 {
-		execute = opts.Daemon.Slave
-	} else {
-		execute = opts.Daemon.Master
-	}
-
-	for _, c := range execute {
-		var str string
-		if len(c) > 0 && string(c[0]) == "$" {
-			str = os.Getenv(c[1:len(c)])
-		} else if count > 0 {
-			var doc bytes.Buffer
-			tmpl, err := template.New("node").Parse(c)
-			if err != nil {
-				panic(err)
-			}
-			err = tmpl.Execute(&doc, nodes)
-			if err != nil {
-				panic(err)
-			}
-			str = doc.String()
-		} else {
-			str = c
-		}
-		if str != "" {
-			commands = append(commands, str)
-		}
-	}
-
-	c := make(chan error)
-
-	go func() {
-		cmd := exec.Command(opts.Daemon.EntryPoint, commands...)
-		defer func() {
-			cmd.Process.Kill()
-		}()
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		if err := cmd.Start(); err != nil {
-			panic(err)
-		}
-		c <- cmd.Wait()
+	defer func() {
+		daemonStarted = false
 	}()
-
-	if err := <-c; err != nil {
-		fmt.Println(err)
+	daemonStarted = true
+	switch scope.Group {
+	case etcd.GroupLeader:
+		launcher.Start(scope, opts.Leader)
+	case etcd.GroupWorker:
+		launcher.Start(scope, opts.Worker)
 	}
 }

@@ -1,3 +1,11 @@
+#
+# OPTIONS:
+# -----------------------
+#
+# AXIS_IP       [string]
+# AXIS_HOSTNAME [string]
+# AXIS_GROUP    [string]
+# AXIS_NODES    [array::string]
 
 etcd:
   endpoints:
@@ -11,9 +19,13 @@ daemon:
     entrypoint: rethinkdb
     command:
       - "--canonical-address"
-      - "{{AXIS_IP}}"
+      - "{{.AXIS_IP}}"
       - "--directory"
       - "/data"
+      - |
+          {{range .AXIS_NODES}}
+          --join {{.}}:29015
+          {{end}}
       - "--bind"
       - "all"
     health:
@@ -23,11 +35,12 @@ daemon:
     entrypoint: rethinkdb
     command:
       - "--canonical-address"
-      - "{{AXIS_IP}}"
+      - "{{.AXIS_IP}}"
       - "--directory"
       - "/data"
-      - "--join"
-      - "{{AXIS_NODES}}"
-      - "{{with index . 0}}{{.IP}}:29015{{end}}"
+      - |
+          {{range .AXIS_NODES}}
+          --join {{.}}:29015
+          {{end}}
       - "--bind"
       - "all"
