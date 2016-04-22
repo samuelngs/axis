@@ -2,10 +2,10 @@
 # OPTIONS:
 # -----------------------
 #
-# AXIS_IP       [string]
-# AXIS_HOSTNAME [string]
-# AXIS_GROUP    [string]
-# AXIS_NODES    [array::string]
+# AXIS_IP       [string]        => Service IP Address
+# AXIS_HOSTNAME [string]        => Service Hostname
+# AXIS_GROUP    [string]        => Service Group (leader|worker)
+# AXIS_NODES    [array::string] => Running Nodes IP Addresses
 
 etcd:
   endpoints:
@@ -22,15 +22,12 @@ daemon:
       - "{{.AXIS_IP}}"
       - "--directory"
       - "/data"
-      - |
-          {{range .AXIS_NODES}}
-          --join {{.}}:29015
-          {{end}}
       - "--bind"
       - "all"
     health:
-      port:
-        - 28015
+      ports:
+        - "28015/tcp"
+        - "29015/tcp"
   worker:
     entrypoint: rethinkdb
     command:
@@ -44,3 +41,7 @@ daemon:
           {{end}}
       - "--bind"
       - "all"
+    health:
+      ports:
+        - "28015/tcp"
+        - "29015/tcp"
