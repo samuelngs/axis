@@ -22,7 +22,7 @@ type (
 	}
 	// ApplicationHealth is the `health checks` section for the `daemon`
 	ApplicationHealth struct {
-		Ports []string `yaml:"ports"`
+		Ports []string `yaml:"ports,omitempty"`
 	}
 	// YamlOptions is the content of yaml configuration file
 	YamlOptions struct {
@@ -46,6 +46,12 @@ func (yaml *YamlOptions) ApplyDefault() {
 	}
 	if yaml.Daemon.Prefix == "" {
 		yaml.Daemon.Prefix = "/"
+	}
+	if yaml.Daemon.Leader.Health == nil {
+		yaml.Daemon.Leader.Health = &ApplicationHealth{[]string{}}
+	}
+	if yaml.Daemon.Worker.Health == nil {
+		yaml.Daemon.Worker.Health = &ApplicationHealth{[]string{}}
 	}
 }
 
