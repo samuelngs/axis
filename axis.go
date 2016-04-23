@@ -4,16 +4,9 @@ import (
 	"log"
 	"os"
 
-	"github.com/samuelngs/axis/etcd"
-	"github.com/samuelngs/axis/health"
-	"github.com/samuelngs/axis/launcher"
+	"github.com/samuelngs/axis/manager"
 	"github.com/samuelngs/axis/models"
 	"github.com/samuelngs/axis/parser"
-)
-
-var (
-	daemonStarted = false
-	healthStarted = false
 )
 
 func main() {
@@ -40,83 +33,41 @@ func main() {
 	}
 
 	// create etcd client
-	client := etcd.NewClient(conf.Etcd.Endpoints)
+	client := manager.NewClient(conf.Etcd.Endpoints)
 
 	// connect etcd server
 	if err := client.Connect(); err != nil {
 		log.Fatal("unable connect etcd client")
 	}
 
-	// process election events
-	go process(client, conf.Daemon)
-
 	// set etcd service directory
-	client.SetDirectory(
+	client.SetDir(
 		conf.Daemon.Prefix, // <= prefix name
 		conf.Daemon.Name,   // <= service name
 	)
+
+	// listen to election events
+	go process(client, conf)
+
+	// observe service directory
+	go client.Observe()
 
 	// execute etcd `leader` election
 	client.Election()
 }
 
-func process(client *etcd.Client, opts *models.ApplicationOptions) {
+func process(client *manager.Client, conf *models.YamlOptions) {
 	for {
 		select {
 		case event := <-client.Events():
 			switch event.Type {
-			case etcd.EventElected:
-				go launchHealthCheck(client, event.Scope, opts)
-				go launchApplication(client, event.Scope, opts)
-			case etcd.EventElecting:
-			case etcd.EventDead:
-			}
-		}
-	}
-}
-
-func launchApplication(client *etcd.Client, scope *models.Scope, opts *models.ApplicationOptions) {
-	if daemonStarted {
-		return
-	}
-	defer func() {
-		daemonStarted = false
-	}()
-	daemonStarted = true
-	close := make(chan struct{}, 1)
-	switch scope.Group {
-	case etcd.GroupLeader:
-		go launcher.Start(close, scope, opts.Leader)
-	case etcd.GroupWorker:
-		go launcher.Start(close, scope, opts.Worker)
-	}
-	<-close
-	os.Exit(0)
-}
-
-func launchHealthCheck(client *etcd.Client, scope *models.Scope, opts *models.ApplicationOptions) {
-	if healthStarted {
-		return
-	}
-	defer func() {
-		healthStarted = false
-	}()
-	healthStarted = true
-	receive := make(chan string)
-	switch scope.Group {
-	case etcd.GroupLeader:
-		go health.Check(receive, opts.Leader.Health.Ports...)
-	case etcd.GroupWorker:
-		go health.Check(receive, opts.Worker.Health.Ports...)
-	}
-	for {
-		select {
-		case msg := <-receive:
-			switch msg {
-			case health.Pass:
-				client.SetServiceRunning()
-			case health.Fail:
-				client.UnsetServiceRunning()
+			case manager.EventElected:
+				switch event.Group {
+				case manager.GroupLeader:
+					client.RunApplication(conf.Daemon.Leader)
+				case manager.GroupWorker:
+					client.RunApplication(conf.Daemon.Worker)
+				}
 			}
 		}
 	}
