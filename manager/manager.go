@@ -38,6 +38,7 @@ type (
 		// service state
 		running bool
 		started bool
+		locked  bool
 
 		// election state
 		leader *models.Leader
@@ -346,20 +347,53 @@ func (c *Client) LeaderDiscovery() {
 				c.events <- &models.Event{Type: EventElected, Group: GroupLeader}
 			} else {
 				fmt.Println("# elected as worker")
-				c.events <- &models.Event{Type: EventElected, Group: GroupWorker}
+				// do not send any event until leader node is ready
+				if nodes := c.GetRunningNodes(); len(nodes) > 0 {
+					c.events <- &models.Event{Type: EventElected, Group: GroupWorker}
+				} else {
+					go c.WaitForLeader()
+				}
 			}
 		} else if c.leader != nil && leader.Key != c.leader.Key {
 			if leader.Key == self {
 				fmt.Println("# re-elected as leader")
 				c.events <- &models.Event{Type: EventReElected, Group: GroupLeader}
-			} else {
-				fmt.Println("# re-elected as worker")
-				c.events <- &models.Event{Type: EventReElected, Group: GroupWorker}
 			}
 		}
 		c.Lock()
 		c.leader = leader
 		c.Unlock()
+	}
+}
+
+// WaitForLeader - wait for leader node is ready
+func (c *Client) WaitForLeader() {
+	defer func() {
+		c.Lock()
+		c.locked = false
+		c.Unlock()
+	}()
+	c.RLock()
+	var locked = c.locked
+	c.RUnlock()
+	if !locked {
+		fmt.Println("# waiting for leader node")
+		c.Lock()
+		c.locked = true
+		c.Unlock()
+		interval := time.NewTicker(ServiceTTL)
+		defer interval.Stop()
+		for {
+			select {
+			case <-interval.C:
+				fmt.Println("# scanning running nodes...")
+				if nodes := c.GetRunningNodes(); len(nodes) > 0 {
+					c.events <- &models.Event{Type: EventElected, Group: GroupWorker}
+				} else {
+					fmt.Println("# no nodes are ready yet")
+				}
+			}
+		}
 	}
 }
 
