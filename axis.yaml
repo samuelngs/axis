@@ -4,7 +4,6 @@
 #
 # AXIS_IP       [string]        => Service IP Address
 # AXIS_HOSTNAME [string]        => Service Hostname
-# AXIS_GROUP    [string]        => Service Group (leader|worker)
 # AXIS_NODES    [array::string] => Running Nodes IP Addresses
 
 etcd:
