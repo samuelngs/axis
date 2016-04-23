@@ -13,6 +13,8 @@ import (
 	"golang.org/x/net/context"
 
 	"github.com/coreos/etcd/client"
+	"github.com/samuelngs/axis/health"
+	"github.com/samuelngs/axis/launcher"
 	"github.com/samuelngs/axis/models"
 )
 
@@ -35,6 +37,7 @@ type (
 
 		// service state
 		running bool
+		started bool
 
 		// election state
 		leader *models.Leader
@@ -61,6 +64,8 @@ const (
 
 	// EventElected - the leader election is completed
 	EventElected string = "elected"
+	// EventReElected - the leader election is completed
+	EventReElected string = "re-elected"
 	// EventElection - the leader election is started
 	EventElection = "election"
 	// EventReady - the service is ready to run
@@ -119,8 +124,9 @@ func (c *Client) SetupDirectory() {
 	}
 }
 
-// Observe - observe directory
-func (c *Client) Observe(prefix, name string) {
+// SetDir - set discovery directory
+func (c *Client) SetDir(prefix, name string) {
+	c.Lock()
 	c.dir = &models.Directory{
 		Base:     fmt.Sprintf("%v/%v", prefix, name),
 		Election: fmt.Sprintf("%v/%v/%v", prefix, name, DirectoryElection),
@@ -129,6 +135,11 @@ func (c *Client) Observe(prefix, name string) {
 		Nodes:    fmt.Sprintf("%v/%v/%v", prefix, name, DirectoryNodes),
 		Masters:  fmt.Sprintf("%v/%v/%v", prefix, name, DirectoryMasters),
 	}
+	c.Unlock()
+}
+
+// Observe - observe directory
+func (c *Client) Observe() {
 	// register service
 	c.SetupDirectory()
 	c.RegisterNode(c.dir.Node(c.address))
@@ -150,9 +161,13 @@ func (c *Client) Observe(prefix, name string) {
 				c.RenewNode(c.dir.ElectionNode(c.address))
 				if running {
 					c.RenewNode(c.dir.RunningNode(c.address))
+					if c.IsLeader() {
+						c.RenewNode(c.dir.MasterNode(c.address))
+					}
 				} else {
 					c.RenewNode(c.dir.QueueNode(c.address))
 				}
+				c.LeaderDiscovery()
 			}()
 		}
 	}
@@ -181,24 +196,44 @@ func (c *Client) Election() {
 	// create election directory if it does not exist
 	c.client.Set(ctx, key, c.address, &client.SetOptions{
 		Dir: false,
-		TTL: ElectionTTL,
+		TTL: ServiceTTL,
 	})
-	// create a timer to refresh the etcd node
-	refresh := time.NewTicker(ElectionTTL / 2)
-	defer refresh.Stop()
-	// observe election changes
-	go c.Stop(ctx)
-	for {
-		select {
-		case <-refresh.C:
-			c.RenewNode(key)
-			c.LookupLeader(ctx)
-		case <-c.cancel:
-			if !isCancelled {
-				cancel()
-				isCancelled = true
+	// create watcher
+	watcher := c.client.Watcher(c.dir.Election, &client.WatcherOptions{
+		AfterIndex: 0,
+		Recursive:  true,
+	})
+	go func() {
+		for {
+			select {
+			case <-c.cancel:
+				if !isCancelled {
+					cancel()
+					isCancelled = true
+				}
+				return
 			}
-			return
+		}
+	}()
+	// observe election changes
+	for {
+		resp, err := watcher.Next(ctx)
+		if err != nil {
+			panic(err)
+		}
+		if resp.Node.Dir {
+			continue
+		}
+		if c.Leader() == nil {
+			continue
+		}
+		switch resp.Action {
+		case "set", "update":
+		case "delete":
+			if leader := c.Leader(); leader.Key == resp.Node.Key {
+				c.events <- &models.Event{Type: EventElection, Group: GroupWorker}
+				go c.LeaderDiscovery()
+			}
 		}
 	}
 }
@@ -224,43 +259,61 @@ func (c *Client) RenewNode(dir string) {
 	})
 }
 
-// Stop - to observe the etcd nodes changes
-func (c *Client) Stop(ctx context.Context) {
-	// create watcher
-	watcher := c.client.Watcher(c.dir.Election, &client.WatcherOptions{
-		AfterIndex: 0,
-		Recursive:  true,
-	})
+// RunApplication - run application
+func (c *Client) RunApplication(entrypoint *models.ApplicationEntryPoint) {
+	c.RLock()
+	if c.started {
+		return
+	}
+	c.RUnlock()
+	c.Lock()
+	c.started = true
+	c.Unlock()
+	receive := make(chan string)
+	// generate scope
+	scope := c.GenerateScope()
+	// launcher start daemon
+	go launcher.Start(scope, entrypoint)
+	// health check
+	if entrypoint.Health != nil && entrypoint.Health.Ports != nil {
+		go health.Check(receive, entrypoint.Health.Ports...)
+	}
 	for {
-		resp, err := watcher.Next(ctx)
-		if err != nil {
-			panic(err)
-		}
-		if resp.Node.Dir {
-			continue
-		}
-		if c.Leader() == nil {
-			continue
-		}
-		switch resp.Action {
-		case "set", "update":
-		case "delete":
-			if leader := c.Leader(); leader.Key == resp.Node.Key {
-				c.events <- &models.Event{Type: EventDead, Group: GroupWorker}
-				c.events <- &models.Event{Type: EventElecting, Group: GroupWorker}
-				c.LookupLeader(ctx)
+		select {
+		case event := <-receive:
+			switch event {
+			case health.Pass:
+				c.Lock()
+				c.running = true
+				c.Unlock()
+				c.RegisterNode(c.dir.Running)
+			case health.Fail:
+				c.Lock()
+				c.running = false
+				c.Unlock()
+				c.UnsetNode(c.dir.Running)
 			}
 		}
 	}
 }
 
-// LookupLeader - get leader/master node information
-func (c *Client) LookupLeader(ctx context.Context) {
+// IsLeader - is current node a leader
+func (c *Client) IsLeader() bool {
+	// self node key
+	self := c.dir.ElectionNode(c.address)
+	if c.leader != nil && c.leader.Key == self {
+		return true
+	}
+	return false
+}
+
+// LeaderDiscovery - get leader/master node information
+func (c *Client) LeaderDiscovery() {
 	dir := c.dir.Election
 	// self node key
 	self := fmt.Sprintf("%v/%v", dir, c.address)
 	// get a list of election nodes
-	resp, err := c.client.Get(ctx, dir, &client.GetOptions{Sort: true})
+	resp, err := c.client.Get(context.Background(), dir, &client.GetOptions{Sort: true})
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -287,16 +340,21 @@ func (c *Client) LookupLeader(ctx context.Context) {
 		c.Unlock()
 	} else {
 		leader := &models.Leader{Key: key, Address: addr}
-		if c.leader == nil && leader.Key == self {
-			fmt.Println("# elected as leader")
-			c.events <- &models.Event{Type: EventElected, Group: GroupLeader, Scope: c.GenerateScope(ctx, GroupLeader)}
-		} else if c.leader != nil && leader.Key != c.leader.Key {
+		if c.leader == nil {
 			if leader.Key == self {
 				fmt.Println("# elected as leader")
-				c.events <- &models.Event{Type: EventElected, Group: GroupLeader, Scope: c.GenerateScope(ctx, GroupLeader)}
+				c.events <- &models.Event{Type: EventElected, Group: GroupLeader}
 			} else {
 				fmt.Println("# elected as worker")
-				c.events <- &models.Event{Type: EventElected, Group: GroupWorker, Scope: c.GenerateScope(ctx, GroupWorker)}
+				c.events <- &models.Event{Type: EventElected, Group: GroupWorker}
+			}
+		} else if c.leader != nil && leader.Key != c.leader.Key {
+			if leader.Key == self {
+				fmt.Println("# re-elected as leader")
+				c.events <- &models.Event{Type: EventReElected, Group: GroupLeader}
+			} else {
+				fmt.Println("# re-elected as worker")
+				c.events <- &models.Event{Type: EventReElected, Group: GroupWorker}
 			}
 		}
 		c.Lock()
@@ -305,54 +363,23 @@ func (c *Client) LookupLeader(ctx context.Context) {
 	}
 }
 
-// SetServiceRunning - change service status as running
-func (c *Client) SetServiceRunning() {
-	// generate election key
-	key := c.dir.RunningNode(c.address)
-	// register service
-	c.client.Set(context.Background(), key, c.address, &client.SetOptions{
-		Dir: false,
-		TTL: ServiceTTL,
-	})
-}
-
-// RenewService - renew service status as running (ttl)
-func (c *Client) RenewService() {
-	// generate election key
-	key := c.dir.RunningNode(c.address)
-	// register service
-	c.client.Set(context.Background(), key, c.address, &client.SetOptions{
-		PrevExist: client.PrevExist,
-		TTL:       ServiceTTL,
-	})
-}
-
-// UnsetServiceRunning - change service status as stopped
-func (c *Client) UnsetServiceRunning() {
-	// generate election key
-	key := c.dir.RunningNode(c.address)
-	// unregister service
-	c.client.Delete(context.Background(), key, nil)
-}
-
 // GenerateScope - generate scope base
-func (c *Client) GenerateScope(ctx context.Context, group string) *models.Scope {
+func (c *Client) GenerateScope() *models.Scope {
 	return models.SetupEnvironment(
 		c.GetServiceHostname(),
 		c.GetServiceIP(),
-		group,
-		c.GetRunningNodes(ctx),
+		c.GetRunningNodes(),
 	)
 }
 
 // GetRunningNodes to get existed nodes
-func (c *Client) GetRunningNodes(ctx context.Context) []models.Node {
+func (c *Client) GetRunningNodes() []models.Node {
 	dir := c.dir.Running
 	res := []models.Node{}
 	if c.client == nil {
 		return res
 	}
-	resp, err := c.client.Get(ctx, dir, nil)
+	resp, err := c.client.Get(context.Background(), dir, nil)
 	if err != nil {
 		return res
 	}
