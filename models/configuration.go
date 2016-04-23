@@ -31,18 +31,10 @@ type (
 	}
 )
 
-var (
-	// DefaultEtcdEndpoints - the default etcd server access endpoint
-	DefaultEtcdEndpoints = []string{"http://127.0.0.1:2379", "http://127.0.0.1:4001"}
-)
-
 // ApplyDefault - default configuration
 func (yaml *YamlOptions) ApplyDefault() {
 	if yaml.Etcd == nil {
-		yaml.Etcd = &EtcdOptions{DefaultEtcdEndpoints}
-	}
-	if yaml.Etcd.Endpoints == nil {
-		yaml.Etcd = &EtcdOptions{DefaultEtcdEndpoints}
+		yaml.Etcd = &EtcdOptions{}
 	}
 	if yaml.Daemon.Prefix == "" {
 		yaml.Daemon.Prefix = "/"
