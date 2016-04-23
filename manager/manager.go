@@ -16,6 +16,7 @@ import (
 	"github.com/samuelngs/axis/health"
 	"github.com/samuelngs/axis/launcher"
 	"github.com/samuelngs/axis/models"
+	"github.com/samuelngs/axis/pkg/network"
 )
 
 type (
@@ -439,15 +440,25 @@ func (c *Client) GetEnvEndPoint() string {
 
 // GetEndPoint - to get endpoint from config, env or docker host
 func (c *Client) GetEndPoint() []string {
-	for i := 0; i < 2; i++ {
+	for i := 0; i < 3; i++ {
 		switch i {
 		case 0:
 			if c.endpoints != nil && len(c.endpoints) > 0 {
 				return c.endpoints
 			}
 		case 1:
-			if arr := strings.Split(c.GetEnvEndPoint(), ","); len(arr) > 0 {
+			env := c.GetEnvEndPoint()
+			if strings.TrimSpace(env) == "" {
+				continue
+			}
+			if arr := strings.Split(env, ","); len(arr) > 0 {
 				return arr
+			}
+		case 2:
+			addr := c.GetServiceHostIP()
+			return []string{
+				fmt.Sprintf("http://%v:2379", addr),
+				fmt.Sprintf("http://%v:4001", addr),
 			}
 		}
 	}
@@ -461,6 +472,26 @@ func (c *Client) GetServiceHostname() string {
 		return ""
 	}
 	return hostname
+}
+
+// GetServiceHostIP - return service host ip (container host)
+func (c *Client) GetServiceHostIP() string {
+	output, err := network.IP("route")
+	if err != nil {
+		log.Fatal(err)
+	}
+	for _, line := range strings.Split(output, "\n") {
+		if !strings.Contains(line, "default") {
+			continue
+		}
+		parts := strings.Split(line, " ")
+		for _, part := range parts {
+			if ip := net.ParseIP(part); ip != nil {
+				return part
+			}
+		}
+	}
+	return ""
 }
 
 // GetServiceIP - get service ip address
@@ -509,6 +540,7 @@ func (c *Client) Connect() error {
 		Transport:               client.DefaultTransport,
 		HeaderTimeoutPerRequest: time.Second,
 	}
+	fmt.Printf("# connect to %v\n", endpoints)
 	conn, err := client.New(cfg)
 	if err != nil {
 		return err
