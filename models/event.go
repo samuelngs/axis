@@ -5,6 +5,5 @@ type (
 	Event struct {
 		Type  string `json:"type"`
 		Group string `json:"group"`
-		Scope *Scope `json:"scope"`
 	}
 )

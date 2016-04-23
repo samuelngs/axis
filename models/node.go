@@ -33,7 +33,17 @@ func (dir *Directory) RunningNode(addr string) string {
 	return fmt.Sprintf("%v/%v", dir.Running, addr)
 }
 
+// QueueNode - generate queue node
+func (dir *Directory) QueueNode(addr string) string {
+	return fmt.Sprintf("%v/%v", dir.Queue, addr)
+}
+
 // Node - generate node address
 func (dir *Directory) Node(addr string) string {
 	return fmt.Sprintf("%v/%v", dir.Nodes, addr)
+}
+
+// MasterNode - generate master node address
+func (dir *Directory) MasterNode(addr string) string {
+	return fmt.Sprintf("%v/%v", dir.Masters, addr)
 }

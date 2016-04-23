@@ -13,16 +13,14 @@ import (
 type Scope struct {
 	Hostname string
 	IP       string
-	Group    string
 	Nodes    Nodes
 }
 
 // SetupEnvironment - to create a scope instance
-func SetupEnvironment(hostname, ip, group string, nodes Nodes) *Scope {
+func SetupEnvironment(hostname, ip string, nodes Nodes) *Scope {
 	return &Scope{
 		Hostname: hostname,
 		IP:       ip,
-		Group:    group,
 		Nodes:    nodes,
 	}
 }
