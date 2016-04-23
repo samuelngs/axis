@@ -11,7 +11,7 @@ import (
 
 const (
 	// Pass - Result Passed
-	Pass string = "OK"
+	Pass string = "PASS"
 	// Fail - Result Failed
 	Fail = "FAIL"
 )
