@@ -21,11 +21,23 @@ func Start(scope *models.Scope, opts *models.ApplicationEntryPoint) {
 	l := len(opts.Command)
 	for i, v := range opts.Command {
 		if arg := scope.Compile(v); strings.TrimSpace(arg) != "" {
-			commands = append(commands, arg)
-			if i != (l - 1) {
-				fmt.Printf("  ├ %v\n", arg)
+			if strings.Contains(v, ".AXIS_NODES") {
+				parts := strings.Split(arg, " ")
+				for r, part := range parts {
+					commands = append(commands, part)
+					if i != (l-1) && r == 0 {
+						fmt.Printf("  ├ %v\n", part)
+					} else {
+						fmt.Printf("  └ %v\n", part)
+					}
+				}
 			} else {
-				fmt.Printf("  └ %v\n", arg)
+				commands = append(commands, arg)
+				if i != (l - 1) {
+					fmt.Printf("  ├ %v\n", arg)
+				} else {
+					fmt.Printf("  └ %v\n", arg)
+				}
 			}
 		}
 	}
