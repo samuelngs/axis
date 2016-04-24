@@ -286,14 +286,23 @@ func (c *Client) RunApplication(entrypoint *models.ApplicationEntryPoint) {
 			switch event {
 			case health.Pass:
 				c.Lock()
+				if !c.running {
+					fmt.Println("service is now running")
+				}
 				c.running = true
 				c.Unlock()
-				c.RegisterNode(c.dir.Running)
+				c.RegisterNode(c.dir.RunningNode(c.address))
+				if c.IsLeader() {
+					c.RegisterNode(c.dir.MasterNode(c.address))
+				}
 			case health.Fail:
 				c.Lock()
+				if c.running {
+					fmt.Println("service is now stopped")
+				}
 				c.running = false
 				c.Unlock()
-				c.UnsetNode(c.dir.Running)
+				c.UnsetNode(c.dir.RunningNode(c.address))
 			}
 		}
 	}
@@ -387,6 +396,9 @@ func (c *Client) WaitForLeader() {
 		for {
 			select {
 			case <-interval.C:
+				if c.IsLeader() {
+					return
+				}
 				fmt.Println("# scanning running nodes...")
 				if nodes := c.GetRunningNodes(); len(nodes) > 0 {
 					c.events <- &models.Event{Type: EventElected, Group: GroupWorker}
