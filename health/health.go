@@ -32,9 +32,10 @@ func Check(receive chan string, ports ...string) {
 				receive <- Pass
 			} else {
 				res := Pass
+			checks:
 				for _, i := range ports {
 					if res == Fail {
-						continue
+						continue checks
 					}
 					p := strings.Split(i, "/")
 					l := len(p)
@@ -51,11 +52,13 @@ func Check(receive chan string, ports ...string) {
 						protocol = "tcp"
 					}
 					port = p[0]
-					c, err := net.ListenPacket(protocol, fmt.Sprintf(":%v", port))
-					defer c.Close()
+					c, err := net.Dial(protocol, fmt.Sprintf("0.0.0.0:%v", port))
 					if err != nil {
+						fmt.Printf("health check [%v/%v] error: %v\n", port, protocol, err)
 						res = Fail
+						continue checks
 					}
+					defer c.Close()
 				}
 				receive <- res
 			}
