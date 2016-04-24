@@ -68,6 +68,11 @@ func process(client *manager.Client, conf *models.YamlOptions) {
 				case manager.GroupWorker:
 					client.RunApplication(conf.Daemon.Worker)
 				}
+			case manager.EventReElected:
+				switch event.Group {
+				case manager.GroupLeader:
+					client.RunApplication(conf.Daemon.Leader)
+				}
 			}
 		}
 	}
