@@ -11,7 +11,7 @@ etcd:
     - http://127.0.0.1:4001
 
 daemon:
-  prefix: /internal.network/services
+  prefix: /develope.network/services
   name: rethinkdb
   leader:
     entrypoint: rethinkdb
@@ -33,10 +33,7 @@ daemon:
       - "{{.AXIS_IP}}"
       - "--directory"
       - "/data"
-      - |
-          {{range .AXIS_NODES}}
-          --join {{.}}:29015
-          {{end}}
+      - "{{range $i, $v := .AXIS_NODES}}{{if $i}} {{end}}--join {{$v}}:29015{{end}}"
       - "--bind"
       - "all"
     health:
